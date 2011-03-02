@@ -4,26 +4,26 @@
 #include <netinet/in.h> /* IPPROTO_* */
 
 struct ipf_ctx_init_opts {
-        int max_contextes;
 
 	/* default 30 seconds, has nothing to do with mm/gc processing.
 	 * In turn this value is of interest to age a context. For example
 	 * it may be possible that a specific fragment is never reassembled
 	 * and thus no  */
-        int max_time;
+        int reassembly_timeout;
+
+        int max_fragments_per_packet_context;
+        int max_packet_contextes;
+        int do_ipv4_checksum_test; /* this option SHOULD be enabled */
 
         /* if memory is over high threshold we iterate over the list
 	 * until the low thresold is reached. */
         int high_threshold;
         int low_threshold;
-        int max_fragments_per_pkt_context;
-        int do_ipv4_checksum_test; /* this option SHOULD be enabled */
-        int reassembly_timeout;
 
 	/* to minize burst effects after all fragments arrives and all
 	 * fragments are re-injected into the network this pace_value
 	 * in milliseconds can be used to pace delay each fragment */
-        int pace_value;
+        int packet_pace_value;
 };
 
 struct ipf_ctx {
@@ -61,7 +61,7 @@ struct ipf_pkt_ctx {
 };
 
 
-int ipf_init(struct ipf_ctx_init_opts *opts, struct ipf_ctx **ctx);
+int ipf_init(struct ipf_ctx_init_opts *opts, struct ipf_ctx *ctx);
 int ipf_destroy(struct ipf_ctx *ctx);
 int ipf_is_fragment(int layer2_type, char *packet, unsigned int size);
 struct ipf_pkt_ctx *ipf_pkt_ctx(struct ipf_ctx *ctx, int layer2_type, char *packet, unsigned int size);

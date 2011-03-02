@@ -8,10 +8,10 @@
 
 
 
-int ipf_init(struct ipf_ctx_init_opts *opts, struct ipf_ctx **ctx)
+int ipf_init(struct ipf_ctx_init_opts *opts, struct ipf_ctx *ctx)
 {
 	assert(opts);
-	assert(*ctx);
+	assert(ctx);
 
 	return 0;
 }
@@ -19,13 +19,17 @@ int ipf_init(struct ipf_ctx_init_opts *opts, struct ipf_ctx **ctx)
 int ipf_destroy(struct ipf_ctx *ctx)
 {
 	free(ctx);
+
+	return 0;
 }
 
 int ipf_is_fragment(int layer2_type, char *packet, unsigned int size)
 {
 	assert(layer2_type == L1_TYPE_ETHER);
+	assert(packet);
+	assert(size > 34); /* eth(14) + ipv4(20) */
 
-	return 1;
+	return 0;
 }
 
 struct ipf_pkt_ctx *ipf_pkt_ctx(struct ipf_ctx *ctx, int layer2_type, char *packet, unsigned int size)
@@ -33,9 +37,12 @@ struct ipf_pkt_ctx *ipf_pkt_ctx(struct ipf_ctx *ctx, int layer2_type, char *pack
 	assert(ctx);
 	assert(layer2_type == L1_TYPE_ETHER);
 	assert(packet);
+	assert(size > 34); /* eth(14) + ipv4(20) */
+
+	return NULL;
 }
 
-#define MIN_ETHER_HEADER_LEN 23
+#define MIN_ETHER_HEADER_LEN 34
 
 int ipf_alloc_pkt_context(struct ipf_pkt_ctx **pkt_ctx)
 {
