@@ -1,6 +1,7 @@
 #ifndef IPH_H
 #define IPH_H
 
+/* FIXME: no network dependecy here */
 #include <netinet/in.h> /* IPPROTO_* */
 
 #include "clist.h"
@@ -41,6 +42,8 @@ struct ipf_fragment_container {
 	char *packet;
 	unsigned int packet_size;
 	void *iphdr;
+	unsigned short frag_start;
+	unsigned short frag_end;
 };
 
 struct ipf_pkt_ctx {
@@ -58,7 +61,8 @@ struct ipf_pkt_ctx {
                 } ipv6;
         } uu;
 
-        struct list *ipf_fragment_container_list; /* this list is _already_ ordered, fragment  */
+	/* the list of fragments. This list is already ordered  */
+        struct list *ipf_fragment_container_list;
 
         char *packet; /* reassemblied packet, the memory is allocated if packet is contructed */
         unsigned int packet_size;

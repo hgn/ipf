@@ -156,14 +156,44 @@ int ipf_is_fragment(int layer2_type, char *packet, unsigned int size)
 static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx, struct ipf_fragment_container *fragment_container)
 {
 	int ret;
-
-	fprintf(stderr, "enqueue fragment into packet context list\n");
+	uint16_t frag_off, hdr_len, tot_len;
+	struct iphdr *iphdr = (struct iphdr *)fragment_container->iphdr;
 
 	/* FIXME: ok, here we go ...
 	 *
 	 * The tricky parts starts here! We must make sure that we enqueue the
 	 * fragment in the correct fragment order. We must make sure that the
 	 * packet is not corrupted and memory does not overlap */
+
+	hdr_len  = iphdr->ihl << 2;
+	frag_off = ntohs(iphdr->frag_off) << 3;
+	tot_len  = ntohs(iphdr->tot_len);
+
+	fprintf(stderr, "  fragment offset %d, total length: %u, hdr_len: %u\n", frag_off, tot_len, hdr_len);
+
+	fragment_container->frag_start = frag_off;
+	fragment_container->frag_end   = tot_len - hdr_len;
+
+	/* now iterate over all fragments and insert the fragment at the right
+	 * position. During this list walk we check if all fragments are
+	 * available and the right position (no holes) and that if the last
+	 * fragment has no fragment flags (e.g. no MORE FLAGS). If so we know
+	 * that all fragments are available and we can mark this packet as
+	 * complete			--HGN */
+
+#if 0
+	tomorrow is a new day ...
+	struct list_element *element, *next_elem;
+
+	for (element = list_head(list); element != NULL; ) {
+
+		next_elem = list_next(element);
+
+		data = element->data;
+
+		element = next_elem;
+	}
+#endif
 
 	ret = list_insert_tail(pkt_ctx->ipf_fragment_container_list, (void *)fragment_container);
 	if (ret != CLIST_SUCCESS) {
@@ -184,7 +214,7 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 	struct ipf_fragment_container *fragment_container;
 	struct ipf_pkt_ctx pkt_ctx, *pkt_ctx_ptr;
 	struct ether_header *eth;
-	struct iphdr *iphdr;
+	struct iphdr *iphdr = NULL;
 
 	assert(ctx);
 	assert(layer2_type == L1_TYPE_ETHER);
@@ -259,9 +289,9 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 		return NULL;
 	}
 
-	fragment_container->packet = packet;
+	fragment_container->packet      = packet;
 	fragment_container->packet_size = size;
-	fragment_container->iphdr = iphdr;
+	fragment_container->iphdr       = iphdr;
 
 	ret = pkt_ctx_insert_frag(pkt_ctx_ptr, fragment_container);
 	if (ret < 0) {
