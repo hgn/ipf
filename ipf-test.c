@@ -49,10 +49,33 @@ static int open_packet_fd(struct ctx *ctx)
 
 }
 
-void packet_in(char *packet, int len)
+void packet_in(struct ctx *ctx, char *packet, int len)
 {
 	if (ipf_is_fragment(L1_TYPE_ETHER, packet, len)) {
-		fprintf(stderr, "packet is fragmented\n");
+		char *new_packet;
+		unsigned int *new_size = NULL;
+		struct ipf_pkt_ctx *pkt_ctx;
+		int ret;
+
+		fprintf(stderr, "packet is fragmented, enqueue it\n");
+
+		pkt_ctx = ipf_ctx_frag_in(&ctx->ipf_ctx, L1_TYPE_ETHER, packet, len);
+		if (pkt_ctx != NULL) {
+			/* all fragments arrived, the packet is allready
+			 * constructed, now it is time to feed the next
+			 * component whith this shinny new packet */
+			ret = ipf_get_reassembled(pkt_ctx, &new_packet, new_size);
+			if (ret < 0) {
+				fprintf(stderr, "should not happended\n");
+			}
+
+			/* Do what you want with new_packet, new_size */
+
+			/* Do what you want with all fragments */
+
+			/* remove fragments, newly created packet and finally
+			 * the structure as well */
+		}
 	}
 }
 
@@ -66,10 +89,9 @@ static void loop(struct ctx *ctx)
 		if (packet_len < 42) /* eth (14), ip (20), udp header (8) */
 			continue;
 
-		fprintf(stderr, "received a packet of len %d byte\n", packet_len);
+		//fprintf(stderr, "received a packet of len %d byte\n", packet_len);
 
-		packet_in(packet, packet_len);
-
+		packet_in(ctx, packet, packet_len);
 	}
 }
 
@@ -82,7 +104,7 @@ int main(void)
 	memset(&opts, 0, sizeof(opts));
 
 	opts.max_packet_contextes = 100;
-	opts.max_fragments_per_packet_context = 20;
+	opts.max_frags_per_packet_context = 20;
 
 	opts.do_ipv4_checksum_test = 0;
 

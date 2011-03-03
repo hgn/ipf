@@ -3,6 +3,8 @@
 
 #include <netinet/in.h> /* IPPROTO_* */
 
+#include "clist.h"
+
 struct ipf_ctx_init_opts {
 
 	/* default 30 seconds, has nothing to do with mm/gc processing.
@@ -11,7 +13,7 @@ struct ipf_ctx_init_opts {
 	 * and thus no  */
         int reassembly_timeout;
 
-        int max_fragments_per_packet_context;
+        int max_frags_per_packet_context;
         int max_packet_contextes;
         int do_ipv4_checksum_test; /* this option SHOULD be enabled */
 
@@ -32,14 +34,20 @@ struct ipf_ctx {
 	 * The garbage collector build on this concept by removing
 	 * from the tail of the list until the first_fragment_arrived_time
 	 * is lesser as the limit. */
-        struct list *ipf_pkt_ctx;
+        struct list *pkt_ctx_list;
+};
+
+struct ipf_fragment_container {
+	char *packet;
+	unsigned int packet_size;
+	void *iphdr;
 };
 
 struct ipf_pkt_ctx {
         int type; /* AF_INET or AF_INET6 */
-	int proto; /* IPPROTO_UDP, IPPROTO_TCP, IPPROTO_SCTP, ... */
         union {
                 struct {
+			/* in network byte order */
                         uint32_t src_ip;
                         uint32_t dst_ip;
                         uint16_t id;
@@ -48,24 +56,47 @@ struct ipf_pkt_ctx {
                         uint32_t src_ip[4];
                         uint32_t dst_ip[4];
                 } ipv6;
-        } ;
+        } uu;
 
-        struct list *fragment_list; /* this list is _already_ ordered, fragment  */
+        struct list *ipf_fragment_container_list; /* this list is _already_ ordered, fragment  */
 
         char *packet; /* reassemblied packet, the memory is allocated if packet is contructed */
         unsigned int packet_size;
 
-        struct timespec first_fragment_arrived_time;
+	int packet_complete; /* 1 if all fragments arrived, 0 otherwise */
+
+        struct timeval first_fragment_arrived_time;
 
         /* plus data about fragment count et cetera */
 };
+
+/* FIXME: packet reassembling should not happend here. The better solution
+ * is that re-assembly should take affect if all segments arrived correcly.
+ *
+ * This function SHOULD verify that the packet is already constructed, e.g.
+ * all fragments arrived and reassemblz was successfully */
+int ipf_get_reassembled(struct ipf_pkt_ctx *pkt_ctx, char **pkt, unsigned int *pkt_len);
 
 
 int ipf_init(struct ipf_ctx_init_opts *opts, struct ipf_ctx *ctx);
 int ipf_destroy(struct ipf_ctx *ctx);
 int ipf_is_fragment(int layer2_type, char *packet, unsigned int size);
-struct ipf_pkt_ctx *ipf_pkt_ctx(struct ipf_ctx *ctx, int layer2_type, char *packet, unsigned int size);
-int ipf_alloc_pkt_context(struct ipf_pkt_ctx **pkt_ctx);
+
+/* L1_TYPE_ETHER, L1_TYPE_ATM, ...
+ * Returns 0 if all was ok, -ENOBUFS if no memory is available or
+ * -EIO if the packet checksum is corrupted, -ENOTTY if the packet
+ *  is weird.
+ *
+ * NOTE: this function verify the IP packet checksum. If the packet
+ * checksum is wrong then the   then ipf_pkt_ctx is still intact
+ * except. Note that we CANNOT feed the packet classifier with this
+ * packet because the IP header is clearly defect. Defect packet are
+ * forwarded to the local network stack! Why? Because we don't want to
+ * modify the internal packet processing. For example, the SNMP IP MIB
+ * should be notified. The user should be noticed via SNMP MIB about
+ * corrupted packets.
+ */
+struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx, int layer2_type, char *packet, unsigned int size);
 void ipf_free_pkt_context(struct ipf_pkt_ctx *);
 
 
@@ -82,20 +113,6 @@ enum {
 	L1_TYPE_ETHER,
 };
 
-/* L1_TYPE_ETHER, L1_TYPE_ATM, ...
- * Returns 0 if all was ok, -ENOBUFS if no memory is available or
- * -EIO if the packet checksum is corrupted, -ENOTTY if the packet
- *  is weird.
- *
- * NOTE: this function verify the IP packet checksum. If the packet
- * checksum is wrong then the   then ipf_pkt_ctx is still intact
- * except. Note that we CANNOT feed the packet classifier with this
- * packet because the IP header is clearly defect. Defect packet are
- * forwarded to the local network stack! Why? Because we don't want to
- * modify the internal packet processing. For example, the SNMP IP MIB
- * should be notified. The user should be noticed via SNMP MIB about
- * corrupted packets.   */
-int ipf_insert_pkt(struct ipf_pkt_ctx *, int type, char *pkt, unsigned int len);
 
 /* this functions frees memory by iterating over all fragment list and
  * free memory if diff(first_fragment_arrived_time, current_time) >
