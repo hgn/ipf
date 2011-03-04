@@ -283,3 +283,7 @@ void *list_lookup_match(struct list *list, int (*cmp)(void *, void *), void *dat
 }
 
 
+int list_ds_size(void)
+{
+	return (int)sizeof(struct list);
+}

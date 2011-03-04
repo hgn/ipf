@@ -22,6 +22,10 @@
 
 #include "ipf.h"
 
+#define IPF_IP_MF 0x2000
+#define IPF_IP_OF 0x1FFF
+
+
 static int pkt_ctx_cmp(const void *a, const void *b)
 {
 	int cmp = 0; /* not equal */
@@ -84,10 +88,6 @@ int ipf_destroy(struct ipf_ctx *ctx)
 
 	return 0;
 }
-
-#define IPF_IP_MF 0x2000
-#define IPF_IP_OF 0x1FFF
-
 
 static int is_ipv4_fragment(char *packet, unsigned int size)
 {
@@ -153,11 +153,13 @@ int ipf_is_fragment(int layer2_type, char *packet, unsigned int size)
 }
 
 
-static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx, struct ipf_fragment_container *fragment_container)
+static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx,
+		struct ipf_fragment_container *fragment_container)
 {
 	int ret;
 	uint16_t frag_off, hdr_len, tot_len;
 	struct iphdr *iphdr = (struct iphdr *)fragment_container->iphdr;
+	struct list_element *element, *next_elem;
 
 	/* FIXME: ok, here we go ...
 	 *
@@ -169,10 +171,28 @@ static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx, struct ipf_fragment_
 	frag_off = ntohs(iphdr->frag_off) << 3;
 	tot_len  = ntohs(iphdr->tot_len);
 
-	fprintf(stderr, "  fragment offset %d, total length: %u, hdr_len: %u\n", frag_off, tot_len, hdr_len);
+	fprintf(stderr, "  fragment offset %d, total length: %u, hdr_len: %u\n",
+			frag_off, tot_len, hdr_len);
 
 	fragment_container->frag_start = frag_off;
-	fragment_container->frag_end   = tot_len - hdr_len;
+	fragment_container->frag_end   = frag_off + (tot_len - hdr_len);
+
+	/* memorize the maximum length of all received fragments. */
+	pkt_ctx->curr_max_len = fragment_container->frag_end > pkt_ctx->curr_max_len ?
+		fragment_container->frag_end : pkt_ctx->curr_max_len;
+
+	if (((ntohs(iphdr->frag_off) & ~IPF_IP_OF) & IPF_IP_MF) == 0) {
+		/* last packet, fragment_container->frag_end reflect
+		 * the overal, reassebled packet size */
+
+		if (pkt_ctx->curr_max_len > fragment_container->frag_end) {
+			/* error the current segment is the last one MF
+			 * flag not set, BUT one of the previous segments
+			 * stated that the fragment end is even behind this
+			 * limit, urghl ... What now? Yes, raise an error! */
+		}
+	} else {
+	}
 
 	/* now iterate over all fragments and insert the fragment at the right
 	 * position. During this list walk we check if all fragments are
@@ -181,19 +201,22 @@ static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx, struct ipf_fragment_
 	 * that all fragments are available and we can mark this packet as
 	 * complete			--HGN */
 
-#if 0
-	tomorrow is a new day ...
-	struct list_element *element, *next_elem;
 
-	for (element = list_head(list); element != NULL; ) {
+	for (element = list_head(pkt_ctx->ipf_fragment_container_list); element != NULL; ) {
+
+		struct ipf_fragment_container *fc;
 
 		next_elem = list_next(element);
 
-		data = element->data;
+
+		fc = (struct ipf_fragment_container *)element->data;
+
+		fprintf(stderr, "new frag: [start: %d, end: %d] list element: start %d, end %d\n",
+				fragment_container->frag_start, fragment_container->frag_end,
+				fc->frag_start, fc->frag_end);
 
 		element = next_elem;
 	}
-#endif
 
 	ret = list_insert_tail(pkt_ctx->ipf_fragment_container_list, (void *)fragment_container);
 	if (ret != CLIST_SUCCESS) {
@@ -201,8 +224,7 @@ static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx, struct ipf_fragment_
 		return -ENOMEM;
 	}
 
-	/* fragments still missing */
-	pkt_ctx->packet_complete = 0;
+	pkt_ctx->truesize += sizeof(*fragment_container) + fragment_container->packet_size;
 
 	return 0;
 }
@@ -262,11 +284,17 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 		}
 		memcpy(pkt_ctx_ptr, &pkt_ctx, sizeof(pkt_ctx));
 
+		/* account the struct overhead at the moment,
+		 * later on the fragment size will come to this */
+		pkt_ctx_ptr->truesize = sizeof(pkt_ctx);
+
 		pkt_ctx_ptr->ipf_fragment_container_list = list_create(frag_cmp, frag_free);
 		if (!pkt_ctx_ptr->ipf_fragment_container_list) {
 			fprintf(stderr, "out of mem\n");
 			return NULL;
 		}
+
+		pkt_ctx_ptr->truesize += list_ds_size();
 
 		/* take time */
 		ret = gettimeofday(&pkt_ctx_ptr->first_fragment_arrived_time, NULL);

@@ -76,7 +76,9 @@ void packet_in(struct ctx *ctx, char *packet, int len)
 			/* remove fragments, newly created packet and finally
 			 * the structure as well */
 		}
+	fprintf(stderr, "\n\n");
 	}
+
 }
 
 static void loop(struct ctx *ctx)

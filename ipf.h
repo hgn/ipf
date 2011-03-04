@@ -72,6 +72,14 @@ struct ipf_pkt_ctx {
         struct timeval first_fragment_arrived_time;
 
         /* plus data about fragment count et cetera */
+	uint16_t curr_max_len;
+
+#define IPF_FRAG_LAST_IN       0x1
+#define IPF_FRAG_FIRST_IN      0x2
+#define IPF_FRAG_COMPLETE      0x4
+
+	uint16_t flags;
+	unsigned int truesize;
 };
 
 /* FIXME: packet reassembling should not happend here. The better solution
