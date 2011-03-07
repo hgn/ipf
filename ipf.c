@@ -89,31 +89,19 @@ int ipf_destroy(struct ipf_ctx *ctx)
 	return 0;
 }
 
-static int is_ipv4_fragment(char *packet, unsigned int size)
+static inline int is_ipv4_fragment(char *packet, unsigned int size)
 {
 	struct iphdr *iphdr = (struct iphdr *)(packet + ETHER_HDR_LEN);
 
 	(void) size;
 
-	//fprintf(stderr, "  received IPv4 packet\n");
-
-	/* I place the guard here, hopefully this rare effent
-	 * is implemented some day --HGN */
-	if (iphdr->ihl != 5) {
-		/* FIXME: not implemented */
-		fprintf(stderr, "ipv4 header with options, skipping");
-		return 0;
-	}
-
-	if (iphdr->frag_off & htons(IPF_IP_MF | IPF_IP_OF)) {
+	if (iphdr->frag_off & htons(IPF_IP_MF | IPF_IP_OF))
 		return 1;
-	}
-
 
 	return 0;
 }
 
-static int is_ipv6_fragment(char *packet, unsigned int size)
+static inline int is_ipv6_fragment(char *packet, unsigned int size)
 {
 	/* struct ip6_hdr *ip6_hdr = (struct ip6_hdr *)(packet + ETHER_HDR_LEN); */
 
@@ -125,7 +113,7 @@ static int is_ipv6_fragment(char *packet, unsigned int size)
 	return 0;
 }
 
-/* this function returns 1 if the packet is fragmented. Or 0 if not fragmented
+/* this function returns 1 if the packet is fraged. Or 0 if not fragmented
  * or the format is not known (e.g. no IP packet) */
 int ipf_is_fragment(int layer2_type, char *packet, unsigned int size)
 {
@@ -138,28 +126,121 @@ int ipf_is_fragment(int layer2_type, char *packet, unsigned int size)
 	eth = (struct ether_header *)packet;
 
 	switch (ntohs(eth->ether_type)) {
-		case ETHERTYPE_IP:
-			return is_ipv4_fragment(packet, size);
-			break;
-		case ETHERTYPE_IPV6:
-			return is_ipv6_fragment(packet, size);
-			break;
-		default:
-			return 0;
-			break;
+	case ETHERTYPE_IP:
+		return is_ipv4_fragment(packet, size);
+		break;
+	case ETHERTYPE_IPV6:
+		return is_ipv6_fragment(packet, size);
+		break;
+	default:
+		return 0;
+		break;
 	}
 
 	return 0;
 }
 
+/* return boolean value */
+static int is_packet_complete(struct ipf_pkt_ctx *pkt_ctx)
+{
+	if (!(pkt_ctx->flags & IPF_FRAG_LAST_IN))
+		return 0;
+
+	fprintf(stderr, "last packet? -> curr in: %d  |  must in: %d\n",
+			pkt_ctx->curr_len, pkt_ctx->curr_max_len);
+
+	if (pkt_ctx->curr_len != pkt_ctx->curr_max_len)
+		return 0;
+
+	/* all in */
+	return 1;
+}
+
+static int insert_into_fraglist(struct ipf_pkt_ctx *pkt_ctx,
+		struct ipf_frag_container *frag_container)
+{
+	int ret;
+	struct list_element *element, *next_elem;
+
+	fprintf(stderr, "new frag: [start: %d, end: %d (frag len: %d bytes)]\n",
+			frag_container->frag_off_start, frag_container->frag_off_end,
+			frag_container->frag_off_end - frag_container->frag_off_start);
+
+	if (list_size(pkt_ctx->ipf_frag_container_list) == 0) {
+
+		fprintf(stderr, "first element in list -> insert at HEAD\n");
+		/* first frag in newly created list */
+		ret = list_insert_tail(pkt_ctx->ipf_frag_container_list,
+				(void *)frag_container);
+		if (ret != CLIST_SUCCESS) {
+			fprintf(stderr, "Cannot enqueue packet context into list\n");
+			return -ENOMEM;
+		}
+
+		pkt_ctx->curr_len = frag_container->frag_off_end - frag_container->frag_off_start;
+
+		return 0;
+	}
+
+	/* ok, there is more then one element in the list, add the fragment
+	 * in the correct fragment offset order */
+	for (element = list_head(pkt_ctx->ipf_frag_container_list); element != NULL; ) {
+
+		struct ipf_frag_container *fc;
+
+		next_elem = list_next(element);
+
+
+		fc = (struct ipf_frag_container *)element->data;
+
+		if (fc->frag_off_end == frag_container->frag_off_start) {
+
+			fprintf(stderr, "insert here\n");
+
+			/* check if already the next fragment is already
+			 * received - this become true if a IP packet
+			 * is duplicated */
+			if (next_elem && next_elem->data) {
+
+				struct ipf_frag_container *fcn;
+				fcn = (struct ipf_frag_container *)next_elem->data;
+
+				if (fcn->frag_off_start == frag_container->frag_off_start) {
+					fprintf(stderr, "dublicate detected - what should I do?\n");
+					return -1;
+				}
+
+			}
+
+			ret = list_ins_next(pkt_ctx->ipf_frag_container_list, element,
+					(void *)frag_container);
+			if (ret != CLIST_SUCCESS) {
+				fprintf(stderr, "Cannot enqueue packet context into list\n");
+				return -ENOMEM;
+			}
+
+			pkt_ctx->curr_len += frag_container->frag_off_end - frag_container->frag_off_start;
+
+			return 0;
+
+		} else if (fc->frag_off_end > frag_container->frag_off_start) {
+			fprintf(stderr, "insert later\n");
+		} else if (frag_container->frag_off_start < fc->frag_off_end) {
+			fprintf(stderr, "leaped a frag\n");
+		}
+
+		element = next_elem;
+	}
+
+	return 0;
+}
 
 static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx,
-		struct ipf_fragment_container *fragment_container)
+		struct ipf_frag_container *frag_container)
 {
 	int ret;
 	uint16_t frag_off, hdr_len, tot_len;
-	struct iphdr *iphdr = (struct iphdr *)fragment_container->iphdr;
-	struct list_element *element, *next_elem;
+	struct iphdr *iphdr = (struct iphdr *)frag_container->iphdr;
 
 	/* FIXME: ok, here we go ...
 	 *
@@ -174,24 +255,28 @@ static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx,
 	fprintf(stderr, "  fragment offset %d, total length: %u, hdr_len: %u\n",
 			frag_off, tot_len, hdr_len);
 
-	fragment_container->frag_start = frag_off;
-	fragment_container->frag_end   = frag_off + (tot_len - hdr_len);
+	frag_container->frag_off_start = frag_off;
+	frag_container->frag_off_end   = frag_off + (tot_len - hdr_len);
 
 	/* memorize the maximum length of all received fragments. */
-	pkt_ctx->curr_max_len = fragment_container->frag_end > pkt_ctx->curr_max_len ?
-		fragment_container->frag_end : pkt_ctx->curr_max_len;
+	pkt_ctx->curr_max_len = frag_container->frag_off_end > pkt_ctx->curr_max_len ?
+		frag_container->frag_off_end : pkt_ctx->curr_max_len;
+
+	fprintf(stderr, "new curr max: %d\n", pkt_ctx->curr_max_len);
 
 	if (((ntohs(iphdr->frag_off) & ~IPF_IP_OF) & IPF_IP_MF) == 0) {
-		/* last packet, fragment_container->frag_end reflect
+		/* last packet, fragment_container->frag_off_end reflect
 		 * the overal, reassebled packet size */
+		pkt_ctx->flags |= IPF_FRAG_LAST_IN;
 
-		if (pkt_ctx->curr_max_len > fragment_container->frag_end) {
+		fprintf(stderr, "last packet is in\n");
+
+		if (pkt_ctx->curr_max_len > frag_container->frag_off_end) {
 			/* error the current segment is the last one MF
 			 * flag not set, BUT one of the previous segments
 			 * stated that the fragment end is even behind this
 			 * limit, urghl ... What now? Yes, raise an error! */
 		}
-	} else {
 	}
 
 	/* now iterate over all fragments and insert the fragment at the right
@@ -201,30 +286,25 @@ static int pkt_ctx_insert_frag(struct ipf_pkt_ctx *pkt_ctx,
 	 * that all fragments are available and we can mark this packet as
 	 * complete			--HGN */
 
-
-	for (element = list_head(pkt_ctx->ipf_fragment_container_list); element != NULL; ) {
-
-		struct ipf_fragment_container *fc;
-
-		next_elem = list_next(element);
-
-
-		fc = (struct ipf_fragment_container *)element->data;
-
-		fprintf(stderr, "new frag: [start: %d, end: %d] list element: start %d, end %d\n",
-				fragment_container->frag_start, fragment_container->frag_end,
-				fc->frag_start, fc->frag_end);
-
-		element = next_elem;
+	ret = insert_into_fraglist(pkt_ctx, frag_container);
+	if (ret < 0) {
+		fprintf(stderr, "Cannot add fragment to fragment list\n");
+		return ret;
 	}
 
-	ret = list_insert_tail(pkt_ctx->ipf_fragment_container_list, (void *)fragment_container);
-	if (ret != CLIST_SUCCESS) {
-		fprintf(stderr, "Cannot enqueue packet context into list\n");
-		return -ENOMEM;
+	if (frag_container->frag_off_start == 0)
+		pkt_ctx->flags |= IPF_FRAG_FIRST_IN;
+
+	if (is_packet_complete(pkt_ctx)) {
+		pkt_ctx->flags |= IPF_FRAG_COMPLETE;
+		fprintf(stderr, "=> all fragments in!\n");
 	}
 
-	pkt_ctx->truesize += sizeof(*fragment_container) + fragment_container->packet_size;
+
+	/* update statistics */
+	pkt_ctx->truesize += list_ds_element_size() +
+		sizeof(*frag_container) +
+		frag_container->packet_size;
 
 	return 0;
 }
@@ -233,7 +313,7 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 		int layer2_type, char *packet, unsigned int size)
 {
 	int ret;
-	struct ipf_fragment_container *fragment_container;
+	struct ipf_frag_container *frag_container;
 	struct ipf_pkt_ctx pkt_ctx, *pkt_ctx_ptr;
 	struct ether_header *eth;
 	struct iphdr *iphdr = NULL;
@@ -246,7 +326,7 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 	memset(&pkt_ctx, 0, sizeof(pkt_ctx));
 
 
-	/* FIXME: save header processing overhead (two time: here and is_fragment() */
+	/* FIXME: save header processing overhead (two time: here and is_frag() */
 	eth = (struct ether_header *)packet;
 	switch (ntohs(eth->ether_type)) {
 		case ETHERTYPE_IP:
@@ -285,11 +365,11 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 		memcpy(pkt_ctx_ptr, &pkt_ctx, sizeof(pkt_ctx));
 
 		/* account the struct overhead at the moment,
-		 * later on the fragment size will come to this */
+		 * later on the frag size will come to this */
 		pkt_ctx_ptr->truesize = sizeof(pkt_ctx);
 
-		pkt_ctx_ptr->ipf_fragment_container_list = list_create(frag_cmp, frag_free);
-		if (!pkt_ctx_ptr->ipf_fragment_container_list) {
+		pkt_ctx_ptr->ipf_frag_container_list = list_create(frag_cmp, frag_free);
+		if (!pkt_ctx_ptr->ipf_frag_container_list) {
 			fprintf(stderr, "out of mem\n");
 			return NULL;
 		}
@@ -297,7 +377,7 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 		pkt_ctx_ptr->truesize += list_ds_size();
 
 		/* take time */
-		ret = gettimeofday(&pkt_ctx_ptr->first_fragment_arrived_time, NULL);
+		ret = gettimeofday(&pkt_ctx_ptr->first_frag_arrived_time, NULL);
 		if (ret < 0) {
 			fprintf(stderr, "gettimeofday error\n");
 			return NULL;
@@ -311,25 +391,26 @@ struct ipf_pkt_ctx *ipf_ctx_frag_in(struct ipf_ctx *ctx,
 		}
 	}
 
-	fragment_container = malloc(sizeof(*fragment_container));
-	if (!fragment_container) {
+	frag_container = malloc(sizeof(*frag_container));
+	if (!frag_container) {
 		fprintf(stderr, "out of mem\n");
 		return NULL;
 	}
 
-	fragment_container->packet      = packet;
-	fragment_container->packet_size = size;
-	fragment_container->iphdr       = iphdr;
+	frag_container->packet      = packet;
+	frag_container->packet_size = size;
+	frag_container->iphdr       = iphdr;
 
-	ret = pkt_ctx_insert_frag(pkt_ctx_ptr, fragment_container);
+	ret = pkt_ctx_insert_frag(pkt_ctx_ptr, frag_container);
 	if (ret < 0) {
 		fprintf(stderr, "Cannot add frag into packet context\n");
+		free(frag_container);
 		return NULL;
 	}
 
 	if (pkt_ctx_ptr->packet_complete) {
-		/* yes, we got all required fragments. Now we
-		 * reassembly the fragments. Construct the packet
+		/* yes, we got all required frags. Now we
+		 * reassembly the frags. Construct the packet
 		 * and return pkt_ctx_ptr to signal our callee that
 		 * the packet is ready */
 

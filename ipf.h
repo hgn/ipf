@@ -38,12 +38,12 @@ struct ipf_ctx {
         struct list *pkt_ctx_list;
 };
 
-struct ipf_fragment_container {
+struct ipf_frag_container {
 	char *packet;
 	unsigned int packet_size;
 	void *iphdr;
-	unsigned short frag_start;
-	unsigned short frag_end;
+	unsigned short frag_off_start;
+	unsigned short frag_off_end;
 };
 
 struct ipf_pkt_ctx {
@@ -62,16 +62,20 @@ struct ipf_pkt_ctx {
         } uu;
 
 	/* the list of fragments. This list is already ordered  */
-        struct list *ipf_fragment_container_list;
+        struct list *ipf_frag_container_list;
 
         char *packet; /* reassemblied packet, the memory is allocated if packet is contructed */
         unsigned int packet_size;
 
 	int packet_complete; /* 1 if all fragments arrived, 0 otherwise */
 
-        struct timeval first_fragment_arrived_time;
+        struct timeval first_frag_arrived_time;
 
-        /* plus data about fragment count et cetera */
+	/* the size of all correctly received fragments,
+	 * the current maximum length. If the last fragment
+	 * is in IPF_FRAG_LAST_IN and curr_len is equal to
+	 * curr_max_len then all fragments arrived */
+	uint16_t curr_len;
 	uint16_t curr_max_len;
 
 #define IPF_FRAG_LAST_IN       0x1
@@ -133,7 +137,7 @@ enum {
 int ipf_gc(struct ipf_ctx *ipf_ctx);
 
 struct ipf_statistics {
-	unsigned int total_fragments;
+	unsigned int total_frags;
 };
 
 /* return statistics about memory usage and other things */

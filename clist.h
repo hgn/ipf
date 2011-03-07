@@ -36,6 +36,7 @@ int list_for_each2(struct list *list, int (*func)(void *data, void *userdata, vo
 int list_remove_each_if_func_eq_1(struct list *list, int (*func)(void *data, void *userdata), void *userdata);
 int list_remove(struct list *list, void **data);
 int list_ds_size(void);
+int list_ds_element_size(void);
 
 int list_ins_next(struct list *list, struct list_element *element, const void *data);
 int list_rem_next(struct list *list, struct list_element *element, void **data);

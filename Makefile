@@ -23,7 +23,10 @@ clean:
 	@rm -f ipf-test core ~*
 
 ipf-test: ipf-test.c ipf.c ipf.h clist.c clist.h
-	$(CC) $(CFLAGS) $(CWARNINGS) -lpcap -o ipf-test ipf-test.c ipf.c ipf.h clist.c clist.h
+	$(CC) $(CFLAGS) $(CWARNINGS) -lpcap -o ipf-test ipf-test.c ipf.c clist.c
+
+ipf.s:
+	$(CC) $(CFLAGS) $(CWARNINGS) -O2 -S ipf.c
 
 cscope:
 	cscope -R -b

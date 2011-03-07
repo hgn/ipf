@@ -287,3 +287,8 @@ int list_ds_size(void)
 {
 	return (int)sizeof(struct list);
 }
+
+int list_ds_element_size(void)
+{
+	return (int)sizeof(struct list_element);
+}
